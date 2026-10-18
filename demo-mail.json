@@ -1,0 +1,14 @@
+{
+  "messages": {
+    "demo-1": {
+      "headers": {"From": "Example Login <login@anthropic.example>", "Subject": "Your demo login link"},
+      "body": "Synthetic login mail. This is not a real login link.",
+      "age_seconds": 60
+    },
+    "demo-2": {
+      "headers": {"From": "Bob <bob@example.com>", "Subject": "Private demo message"},
+      "body": "This message must not be readable with login-sender permission.",
+      "age_seconds": 3600
+    }
+  }
+}

@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.state/
+*.sqlite*
+*token*.json
+client_secret*.json
+client.token
+identity.lock
+oauth-client.json
+.env
+.env.*
