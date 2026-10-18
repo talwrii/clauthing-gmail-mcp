@@ -1,282 +1,179 @@
 # Clauthing Gmail MCP — Selective Access
 
-A local read-only Gmail broker, JSON CLI, and stdio MCP adapter. Clients get
-their own revocable bearer token. The broker keeps Google credentials and
-saved permissions separately. Prototype: tested with synthetic mail; real
-Google authentication and a real MCP host have not yet been exercised.
+Give an LLM agent selective, read-only access to Gmail through MCP, with a
+command-line interface for your own use. The agent requests a specific scope;
+you approve it in your client's permission dialog (MCP elicitation).
 
-## First workflow
+This is AI-generated and unreviewed (including parts of the documentation).
 
-1. Ask to **list** messages from `*anthropic*` received in the last ten minutes.
-2. Choose Precisely once, Ask each time, Allow automatically, or Deny access.
-3. See only message IDs, From, Subject, Date, and received timestamps.
-4. Discover the actual sender address.
-5. Separately ask to **read** messages from that exact address. That grant can
-   have a different message-age limit and permission lifetime.
+## Install
 
-The example wildcard is deliberately broad discovery, not an assertion about
-Anthropic's real sending addresses. Patterns use shell-style glob syntax on
-the parsed From address, case-insensitively. Display names do not count. A From
-match is not a cryptographic guarantee of sender identity.
-
-**Message age and permission lifetime are independent:** a saved list grant
-with a 10-minute age limit always shows only the most recent ten minutes. A
-15-minute read grant with no age limit can read matching historical messages
-for fifteen minutes. Read does not imply list, or vice versa. Pass the returned `access` ID to select the approved scope. Without an ID,
-legacy automatic grants combine by union within the operation; ask-each-time
-rules require explicit selection and confirmation.
-
-## Connect Gmail
-
-Requires Python 3.11+ and pipx. Google's OAuth library is installed automatically.
-Core policy, demo, and tests use the standard library.
-
-Install from the parent workspace (editable so source changes are picked up):
+Requires Python 3.11+ and [pipx](https://pipx.pypa.io/).
 
 ```bash
-pipx install --editable ./clauthing-gmail-mcp
+pipx install clauthing-gmail-mcp
 ```
 
-Enable the [Gmail API](https://console.cloud.google.com/apis/library/gmail.googleapis.com)
-in your Google project and create a dedicated **Desktop app** OAuth client.
-Then authenticate:
+## Set up Google access
+
+Unfortunately, Google grants are set up for websites rather than individuals. You therefore must set up a "client" as though you were creating a website and then grant this app access to your data, as though you were using your website.
+
+### Setting up your "website" (client) in Google Cloud
+
+You need your own Google OAuth client. You only do this setup once.
+
+1. Open [Google Cloud Console](https://console.cloud.google.com/). Use the
+   project selector at the top to create or select a project.
+2. Open the [Gmail API page](https://console.cloud.google.com/apis/library/gmail.googleapis.com)
+   in that project and click **Enable**.
+3. Open **Google Auth Platform → Branding**. If prompted, click **Get started**
+   and enter an app name, support email, and contact email. For a personal
+   Gmail account, choose **External** as the audience.
+4. Under [Audience](https://console.cloud.google.com/auth/audience), leave the
+   app in **Testing** and add your Google account under **Test users**. Use the
+   exact email shown when you sign in. This lets you use your app without
+   completing Google's public verification process.
+5. Under **Data Access**, add the scope
+   `https://www.googleapis.com/auth/gmail.readonly`.
+6. Under [Clients](https://console.cloud.google.com/auth/clients), click
+   **Create client**, choose **Desktop app**, and create it. Copy its client ID
+   and client secret, or download its JSON credentials.
+
+You then give these "website" details to `clauthing-gmail-mcp`. `clauthing-gmail-mcp` then immediately asks Google to provide "your website" with this data.
 
 ```bash
-clauthing-gmail-mcp auth --client-id YOUR_CLIENT_ID --client-secret YOUR_CLIENT_SECRET
+clauthing-gmail-mcp auth --client-id 'YOUR_CLIENT_ID' --client-secret 'YOUR_CLIENT_SECRET'
 ```
 
-This saves the client ID and secret in
-`~/.config/clauthing-gmail-mcp/oauth-client.json` (file mode `0600`, directory
-mode `0700`), then opens Google's browser consent for **gmail.readonly only**.
-`XDG_CONFIG_HOME` is respected; `auth --config-dir PATH` overrides the directory.
-These are this tool's own credentials; rclone configuration is never read.
-Once saved, reuse the login without re-entering credentials or opening a browser:
+Complete Google sign-in in the browser. If it requests access to localhost,
+allow it so the login can finish. Credentials and login tokens are saved;
+subsequent commands reuse them and refresh access tokens automatically.
+
+Check that it works:
 
 ```bash
-clauthing-gmail-mcp auth
+clauthing-gmail-mcp top
 ```
 
-Access and refresh tokens are cached locally. Expired access tokens refresh
-automatically. `auth --reauth` forces a new browser sign-in; revoked/expired
-refresh tokens also require sign-in. Network refresh failures preserve the
-saved login and report an error rather than forcing browser consent.
+If you need to sign in again, run `clauthing-gmail-mcp auth` without the
+credentials arguments. Google apps in Testing have refresh tokens that expire
+after seven days for Gmail access.
 
-Alternatively, `auth --credentials /path/to/desktop-oauth.json` imports and saves
-the Desktop OAuth registration. Both ID and secret must be supplied together
-when setting/replacing the pair. They are saved before browser consent, so a
-cancelled login can be retried. Command arguments may be retained in shell
-history/process listings; JSON-file import avoids putting the secret in argv.
+See Google's [OAuth setup guide](https://developers.google.com/workspace/gmail/api/quickstart/python)
+and [test-user guidance](https://support.google.com/cloud/answer/15549945).
 
-The `mcp` command creates its private client identity on first launch and runs
-its permission broker inside the MCP process. No `client-add` or separate
-`serve` command is needed for MCP. Existing identities are reused, including
-revoked identities: restarting never grants access or resets permissions.
-Google authentication is separate; the MCP can start and advertise tools before
-login, but reading approved mail requires `auth` first.
+## Connect your agent
 
-For the standalone HTTP CLI, the optional setup remains:
+For Codex:
 
 ```bash
-clauthing-gmail-mcp client-add codex
-clauthing-gmail-mcp serve
+codex mcp add clauthing-gmail -- clauthing-gmail-mcp mcp
 ```
 
-This broker listens on `127.0.0.1:8767`. To connect the MCP adapter to it instead
-of using the embedded broker, use `mcp --external-broker`.
+For another MCP client, configure `clauthing-gmail-mcp` as the command and
+`mcp` as its argument. If the client cannot find the executable, use its full
+path (`command -v clauthing-gmail-mcp`). The client needs form elicitation
+support to show approval dialogs.
 
-Google's Testing-mode refresh tokens can expire after seven days. Do not put
-OAuth credentials, client tokens, or owner state into version control. The
-Google token is stored in `~/.local/share/clauthing-gmail-mcp/google-token.json`
-and is shared across projects. Policies and client tokens are stored separately
-for each current directory, outside the workspace:
+Restart your client after registration. The MCP starts its own broker and
+creates its client identity automatically; no separate server command is
+needed. [Codex MCP configuration](https://learn.chatgpt.com/docs/extend/mcp).
 
-```text
-~/.local/share/clauthing-gmail-mcp/projects/home-user-project-<hash>/
-  policy.sqlite
-  client.token
-```
+## Choose what the agent can access
 
-The readable name and hash come from the resolved current directory of the
-process. Symlink aliases share a policy; different paths get separate policies.
-Run `clauthing-gmail-mcp paths` to see the selected paths without creating files.
-The broker, owner CLI, and MCP adapter must start in the same directory to use
-the same defaults. This uses the MCP process directory; it does not discover a
-separate Codex workspace directory. No `cwd` configuration is required here.
-`--state` overrides policy storage, `--auth-state` overrides Google login storage;
-`XDG_DATA_HOME` and `XDG_CONFIG_HOME` are respected. Existing global policy files
-are not automatically migrated. Only one broker can use a given port at once.
+For example, ask your agent to find recent Anthropic login emails. It proposes
+a name and scope, such as **Anthropic login emails**: list headers from
+`*@anthropic.com` received within the last ten minutes. Review the actual
+sender pattern and operation before approving.
 
-For MCP, configure the installed executable in your host, substituting your
-actual home directory for `/home/YOU`:
+Choose one of:
 
-```toml
-[mcp_servers.clauthing-gmail]
-command = "/home/YOU/.local/bin/clauthing-gmail-mcp"
-args = ["mcp"]
-```
+| Choice | What happens |
+| --- | --- |
+| **Precisely once** | Allow one matching list or read call. |
+| **Ask each time** | Save the named scope; confirm each use with **Yes / No**. |
+| **Allow automatically** | Choose a duration in a second dialog, defaulting to **1 hour**. Enter values such as `30m`, `2h`, or `7d`. |
+| **Deny access** | Optionally explain why in a second dialog. The agent receives your reason and can request narrower access. |
 
-Reconnect/restart the MCP host as required. No separate broker is needed.
+Listing exposes IDs and From, Subject, Date, and received timestamps. Reading
+bodies requires a separate read scope. The age filter keeps rolling: “last ten
+minutes” always means the most recent ten minutes, independently of how long
+permission lasts. Sender patterns match addresses, not display names.
 
-## CLI
+The agent uses the returned `access` ID for subsequent `list_messages` or
+`read_message` calls. The name labels the approved scope; changing its sender,
+age, or operation requires a new approval.
 
-For direct owner use, fetch the newest email with the shared Google login:
+Cancelling grants nothing. Cancelling a denial-reason prompt still denies.
+An unused one-use approval expires silently after ten minutes; a failed mail
+fetch still consumes it. Without elicitation, requests remain pending for
+manual CLI approval.
+
+## Command line
+
+Read the newest email directly, without agent permission prompts:
 
 ```bash
 clauthing-gmail-mcp top
 clauthing-gmail-mcp top --json
 ```
 
-`top` prints headers and the body (up to 20,000 characters), or JSON with
-`--json`. It requires only the saved OAuth login: no client token, broker, or
-permission prompts. It fetches the first message in Gmail's normal mailbox
-listing (which excludes spam and trash). It does not change read/unread state.
-This is an owner command and is not exposed as an MCP tool. Any process with
-access to the owner CLI and Google credentials can use it.
-
-
-From this project directory, use `python3 -m clauthing_gmail_mcp` or the
-installed `clauthing-gmail-mcp` command (`clauthing-gmail` remains an alias).
-Client options precede the subcommand.
+Manage the current directory's agent permissions:
 
 ```bash
-# Request permission without accessing any mail.
-clauthing-gmail request list --sender '*anthropic*' --last 10m
-
-# Owner reviews requests and approves the exact stored scope.
-clauthing-gmail requests
-clauthing-gmail approve REQUEST_ID --for 15m
-
-# Client lists permitted headers; filters can narrow but never widen grants.
-clauthing-gmail list --sender '*anthropic*' --last 10m
-
-# Separate read request for a discovered address, any message age.
-clauthing-gmail request read --sender 'actual-sender@example.com'
-clauthing-gmail approve REQUEST_ID --for saved
-clauthing-gmail read MESSAGE_ID
-
-# Owner administration.
-clauthing-gmail clients
-clauthing-gmail grants
-clauthing-gmail revoke grant GRANT_ID
-clauthing-gmail revoke client CLIENT_ID
-clauthing-gmail audit
+clauthing-gmail-mcp grants
+clauthing-gmail-mcp revoke grant GRANT_ID
+clauthing-gmail-mcp clients
+clauthing-gmail-mcp revoke client CLIENT_ID
+clauthing-gmail-mcp requests
+clauthing-gmail-mcp approve REQUEST_ID --for 1h
+clauthing-gmail-mcp audit
 ```
 
-The project token is selected automatically. Override it with `--token-file`
-or `CLAUTHING_GMAIL_TOKEN`.
-Client tokens are hashed in the policy database; the bearer value is written
-only to the token file. A token remains stable while grants change.
+Use `clauthing-gmail-mcp --help` or a subcommand's `--help` for other options.
+The optional `serve` command provides a local HTTP broker for standalone
+permission-controlled CLI clients. Per-use elicitation requires the default
+embedded MCP broker.
 
-## Elicitation and trust boundary
+## Storage and access boundaries
 
-MCP exposes only `request_access`, `list_messages`, and `read_message`.
-The HTTP client API has **no grant/approve/revoke operations**. An ordinary
-client token cannot grant itself access.
+The Google login is shared across projects. Agent permissions and client tokens
+are separate for each resolved MCP process directory, stored outside the
+workspace:
 
-For elicitation, launch the MCP adapter as a **trusted owner-side process**:
+```text
+~/.config/clauthing-gmail-mcp/oauth-client.json
+~/.local/share/clauthing-gmail-mcp/google-token.json
+~/.local/share/clauthing-gmail-mcp/projects/<directory-name>-<hash>/
+    policy.sqlite
+    client.token
+```
+
+Run `clauthing-gmail-mcp paths` to see the selected locations. `--state` overrides
+policy storage; `--auth-state` overrides login storage. XDG config and data
+paths are respected. The owner CLI must run in the same directory as the MCP
+to select the same permissions by default.
+
+Google grants this application mailbox-wide **read-only** access; the broker
+enforces the narrower scopes exposed to the agent. The MCP host is trusted to
+relay your approval responses. An agent with filesystem access to the Google
+tokens, policy database, or owner CLI can bypass those restrictions. Keeping
+files outside the workspace does not itself isolate them; enforce that boundary
+with your sandbox or OS permissions.
+
+No sending, deleting, marking as read, or attachment-download tools are exposed.
+Message bodies are returned as untrusted text or HTML, capped at 20,000
+characters. Lists scan at most 1,000 candidates and report when that limit is
+reached. Revocation blocks future access; it cannot retract content already
+returned.
+
+## Development
+
+For an editable checkout install:
 
 ```bash
-clauthing-gmail mcp
+pipx install --editable .
+python3 -m unittest discover -s tests
 ```
 
-When the host advertises elicitation, the adapter sends an `elicitation/create`
-form describing the immutable requested operation, sender pattern, and age.
-The client supplies a descriptive name with `request_access`; the approval
-prompt displays it together with the exact scope, without asking you to fill
-in a name. The first form offers four choices:
-
-- **Precisely once:** one matching list or read call. Anonymous; no duration
-  follow-up. It silently expires if unused for ten minutes. Consumption is
-  atomic across processes and happens before provider I/O, so a failed backend
-  call still uses the approval.
-- **Ask each time:** save the reviewed scope and its name until revoked. Each
-  selected use opens a Yes/No confirmation naming the rule and operation,
-  without repeating the scope settings. Confirmation is per tool call. List
-  and read remain separate permissions. Denying a use leaves the named rule
-  available for future requests.
-- **Allow automatically:** opens a separate duration form prefilled with `1h`.
-  Enter intervals such as `30m`, `2h`, `7d`, or `1 hour`. Cancelling or entering
-  an invalid interval saves no grant. Access expires after the selected period.
-- **Deny access:** records the denial and opens an optional reason form. The
-  reason is returned to the agent so it can consider narrower access.
-
-The host's native Decline action also opens the reason form. Cancelling the
-initial prompt opens no follow-up. Skipping the reason prompt still denies;
-reasons are returned directly rather than saved in policy. No passwords, login
-codes, or OAuth tokens are requested. Unsupported elicitation and timeouts grant
-nothing. `mcp --no-elicitation` leaves requests for manual owner approval.
-
-`request_access` requires a client-supplied `name` in its tool schema. Its approval result
-contains an `access` ID, `name`, and `mode`. Use the ID with subsequent tools:
-
-```json
-{"name": "list_messages", "arguments": {"access": "ACCESS_ID", "limit": 20}}
-```
-
-The ID selects the exact stored operation, sender, and rolling age; names are
-labels, not authorization. Broader filters cannot widen that rule. A changed
-scope requires another approval. Existing policies migrate with their previous
-automatic behavior intact. CLI duration-based owner grants remain available.
-Ask-each-time confirmation requires the default embedded MCP broker; the
-standalone HTTP broker cannot approve uses and denies those rules. Automatic
-and one-use rules work with both transports.
-
-**The MCP host and owner-side adapter are trusted to relay real human
-responses.** An arbitrary host can forge its own elicitation responses. The
-adapter's owner state is therefore privileged: never give its filesystem
-access to an untrusted client, agent shell, or an untrusted MCP host. An agent
-that can read Google credentials or edit policy/source files can bypass this
-broker. File modes alone do not isolate processes running as the same OS user;
-use an OS sandbox/separate account/container and protect owner state, adapter
-code, and dependency files. This prototype does not configure that isolation.
-
-Google enforces mailbox read-only access using `gmail.readonly`. Our broker
-enforces selective disclosure. It checks expiry and revocation on each call
-and again before returning data. Revocation cannot retract content already
-returned or cached by a client. The broker must access metadata internally to
-filter sender/age, even when that metadata is not disclosed to a client.
-
-## Limits
-
-- Local loopback HTTP broker only; bearer tokens must not be exposed remotely.
-- No send, delete, archive, label changes, mark-as-read, thread expansion, or
-  attachment-download tools. Bodies are returned as untrusted text/HTML data,
-  never rendered; capped at 20,000 characters.
-- Listing scans at most 1,000 candidate messages, newest window first as
-  returned by Gmail; `scan_limit_reached` reports possible incomplete results.
-  There is no promise of a complete historical inbox listing.
-- Temporary grants are time-based, not single-use. Saved grants last until
-  revoked. No background mailbox export or message-body disk cache.
-- Synchronous requests; each default MCP process embeds its own broker. Account selection is through the
-  owner's Google sign-in; separate state directories separate accounts.
-- Elicitation implementation uses the 2025-06-18 form schema; older clients
-  fall back to CLI approval. Native Codex integration is not configured yet.
-
-## Offline demo and verification
-
-```bash
-python3 -m unittest discover -s tests -v
-python3 -m clauthing_gmail_mcp --state .state client-add demo --out .state/client.token
-python3 -m clauthing_gmail_mcp --state .state serve --fixture demo-mail.json
-```
-
-In another terminal, use the same CLI flow with `--state .state` for owner
-commands and `--token-file .state/client.token` for client commands. Use sender
-`*@anthropic.example` for the fake login message. This directory contains fake
-mail only; do not treat the workspace-local demo state as isolated credentials.
-
-The tests exercise list/read separation, sender and rolling-age filtering,
-expiry/revocation, cross-client isolation, non-disclosure on denial, saved
-grants, and a real stdio elicitation request/response exchange with fake mail.
-
-## Prior art
-
-Existing tools cover much of ordinary Gmail access; these were surveyed rather
-than audited: [klodr/gmail-mcp](https://github.com/klodr/gmail-mcp),
-[your-mail-mcp](https://github.com/wildsurfer/your-mail-mcp), and
-[GigaMail](https://github.com/adecubed/gigamail). This prototype explores the
-separate list/read sender-and-age permission workflow instead.
-
-References: [Gmail scopes](https://developers.google.com/workspace/gmail/api/auth/scopes),
-[Google desktop OAuth](https://developers.google.com/identity/protocols/oauth2/native-app),
-[MCP elicitation](https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation).
+`demo-mail.json` supplies fake mail for `serve --fixture demo-mail.json`.
